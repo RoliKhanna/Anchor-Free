@@ -1,24 +1,17 @@
 
-# Implemented from https://github.com/arbenson/mrnmf/blob/master/NMFProcessAlgorithms.py
-
+from nltk.corpus import reuters
 import sys
 import numpy as np
 from scipy import optimize
 
+# Loading data here
+train_documents, train_categories = zip(*[(reuters.raw(i), reuters.categories(i)) for i in reuters.fileids() if i.startswith('training/')])
+test_documents, test_categories = zip(*[(reuters.raw(i), reuters.categories(i)) for i in reuters.fileids() if i.startswith('test/')])
+
 def col2norm(X):
-    """ Compute all column 2-norms of a matrix. """
     return np.sum(np.abs(X) ** 2,axis=0)
 
 def xray(X, r):
-    """ X-ray algorithm for NMF.  This algorithm computes the column indices.
-
-    Args:
-        X: The data matrix.
-        r: The target separation rank.
-
-    Returns:
-        A list of r columns chosen by X-ray.
-    """
     cols = []
     R = np.copy(X)
     while len(cols) < r:
@@ -40,16 +33,6 @@ def xray(X, r):
     return cols
 
 def GP_cols(data, r):
-    """ X-ray algorithm for NMF.  This algorithm computes the column indices.
-
-    Args:
-        data: The matrix G * X, where X is the nonnegative data matrix and G is
-            a matrix with Gaussian i.i.d. random entries.
-        r: The target separation rank.
-
-    Returns:
-        A list of r columns chosen by Gaussian projection.
-    """
     votes = {}
     for row in data:
         min_ind = np.argmin(row)
@@ -64,18 +47,7 @@ def GP_cols(data, r):
     return [x[0] for x in votes][0:r]
 
 def NNLSFrob(X, cols):
-    """ Compute H, the coefficient matrix, by nonnegative least squares to minimize
-    the Frobenius norm.  Given the data matrix X and the columns cols, H is
 
-             \arg\min_{Y \ge 0} \| X - X(:, cols) H \|_F.
-
-    Args:
-        X: The data matrix.
-        cols: The column indices.
-
-    Returns:
-        The matrix H and the relative resiual.
-    """
     ncols = X.shape[1]
     H = np.zeros((len(cols), ncols))
     for i in xrange(ncols):
@@ -85,44 +57,14 @@ def NNLSFrob(X, cols):
     rel_res /= np.linalg.norm(X, 'fro')
     return H, rel_res
 
-def ComputeNMF(data, colnorms, alg, r):
-    """ Compute an approximate separable NMF of the matrix data.  By compute,
-    we mean choose r columns and a best fitting coefficient matrix H.  The
-    r columns are selected by the 'alg' option, which is one of 'SPA', 'xray',
-    or 'GP'.  The coefficient matrix H is the one that produces the smallest
-    Frobenius norm error.  The coefficient matrix H and residual only make sense
-    when the algorithm is 'SPA' or 'xray'.  However, given the columns selected
-    by 'GP', you can call NNLSFrob with the QR data to get H and the relative
-    residual.
+def ComputeNMF(data, colnorms, r):
 
-
-    Args:
-        data: The data matrix.
-        colnorms: The column norms.
-        alg: Choice of algorithm for computing the columns.  One of 'SPA',
-            'xray', or 'GP'.
-        r: The target separation rank.
-
-    Returns:
-        The selected columns, the matrix H, and the relative residual.
-    """
     data = np.copy(data)
     colinv = np.linalg.pinv(np.diag(colnorms))
 
-    if alg == 'SPA':
-        A = np.dot(data, colinv)
-        _, S, Vt = np.linalg.svd(A)
-        A = np.dot(np.diag(S), Vt)
-        cols = SPA(A, r)
-    elif alg == 'xray':
-        _, S, Vt = np.linalg.svd(data)
-        A = np.dot(np.diag(S), Vt)
-        cols = xray(data, r)
-    elif alg == 'GP':
-        data = np.dot(data, colinv)
-        cols = GP_cols(data, r)
-    else:
-        raise Exception('Unknown algorithm: %s' % str(alg))
+    _, S, Vt = np.linalg.svd(data)
+    A = np.dot(np.diag(S), Vt)
+    cols = xray(data, r)
 
     H, rel_res = NNLSFrob(data, cols)
     return cols, H, rel_res
@@ -141,15 +83,10 @@ def ParseColnorms(colpath):
                 norms.append(float(line.split()[-1]))
 	return norms
 
-if __name__ == "__main__":
-    if len(sys.argv) < 5:
-        sys.exit('usage: python NMFProcessAlgorithms.py matrixfile colnormsfile alg r')
-    data = ParseMatrix(sys.argv[1])
-    colnorms = ParseColnorms(sys.argv[2])
-    alg = sys.argv[3]
-    r = int(sys.argv[4])
-    cols, H, rel_res = ComputeNMF(data, colnorms, alg, r)
-    cols.sort()
-    print 'Columns chosen by %s: %s' % (alg, str(cols))
-    if alg in ['SPA', 'xray']:
-        print 'Relative residual: %f' % rel_res
+data = ParseMatrix(train_documents)
+colnorms = ParseColnorms(train_categories)
+r = 4
+cols, H, rel_res = ComputeNMF(data, colnorms, r)
+cols.sort()
+
+print("Final result: ", rel_res)
