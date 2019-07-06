@@ -6,12 +6,16 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from scipy.sparse import csr_matrix
 import cvxopt
 import numpy
+import string
+from cvxpy import *
+from scipy.sparse.linalg import eigs
+import numpy as np
 
-# Initialising data
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+import numpy as np
 
-train_documents, train_categories = zip(*[(reuters.raw(i), reuters.categories(i)) for i in reuters.fileids() if i.startswith('training/')])
-test_documents, test_categories = zip(*[(reuters.raw(i), reuters.categories(i)) for i in reuters.fileids() if i.startswith('test/')])
-epsilon = 0.5   # trying random step size
+import os
 
 def tokenize(text):
     tokens = nltk.word_tokenize(text)
@@ -20,72 +24,113 @@ def tokenize(text):
         stems.append(PorterStemmer().stem(item))
     return stems
 
-# Initialising TFIDF Vector in problem matrix
+# Number of training documents
+size = 1440
+vocab = 19316
 
-size = int(len(train_documents)/100)
-print("length: ", size)
+train_documents = []
+topics = ["business", "entertainment", "politics", "tech"]
+k = len(topics);
+
+import time
+start = time.time()
+#your code here
+
+for topic in topics:
+    for filename in os.listdir("data4/" + topic):
+
+        if filename.endswith(".txt"):
+            f = open("data4/" + topic + "/" + filename, "r")
+            document = f.read().decode('utf-8', errors='ignore')
+            exclude = set(string.punctuation)
+            document = ''.join(ch for ch in document if ch not in exclude)
+            train_documents.append(document)
+
 vectorizer = TfidfVectorizer(tokenizer = tokenize, stop_words = 'english')
+
 newArray = [train_documents[i] for i in range(size)]
 vectorised_train_documents = vectorizer.fit_transform(newArray)
 
+# Prints the vector to vocabulary mapping
+values = vectorizer.get_feature_names()
+
 print("Completed computation of Co-occurrence matrix.")
-co_matrix = vectorised_train_documents * vectorised_train_documents.T
-co_matrix.setdiag(0)
 
+co_matrix = vectorised_train_documents.T * vectorised_train_documents
+#co_matrix.setdiag(0)
+co_matrix = co_matrix / size
+
+# Applying Eigen decomposition to D matrix
 print("Applying square root decomposition to Co-occurrence matrix... ")
-Bo = csr_matrix(co_matrix.sqrt())
-Bt = csr_matrix(Bo.transpose())
 
-print("Beginning problem space")
+vals, vecs = eigs(co_matrix, k=4)
+
+vals_real = numpy.real(vals)
+vals_d = numpy.sqrt(vals_real)
+d_root = numpy.diag(vals_d)
+
+Bo = numpy.real(numpy.matmul(vecs, d_root))
+ones = numpy.ones(vocab)
 
 # Initialise M here, definitely a different method to compute M here
-M = numpy.identity(size)
+M = numpy.identity(k)
 
-# Looping until convergence
-N = []
-while True:
+# Printing the top 20 words in each category
 
-    for i in range(0, size):
 
-        print("Executing iteration ", i)
+for _ in range(10):
 
-        N = M
-        a = []
+
+    for i in range(0, k):
+
+        a = numpy.zeros(k)
+
         # Computing a here
-        for j in range(0, size):
+        for j in range(0, k):
             step = (-1.)**(i+j)
             N = numpy.delete(M, j, axis=0)
             N = numpy.delete(N, i, axis=1)
             Nt = numpy.linalg.det(N)
-            a.append(step*Nt)
+            a[j] = (step*Nt)
 
-        # a = numpy.asarray(a).astype(numpy.double).reshape(size,1)
-        # Bo = cvxopt.matrix(Bo)
-        # cvx_q = cvxopt.matrix(a)
-        #
-        # argmax = cvxopt.solvers.lp(cvx_q, Bo, [0,1])
-        # argmin = cvxopt.solvers.lp(a, Bo, [0,-1])
+        # Solving the optimization problem
+        x = Variable(k)
 
-        argmax = numpy.argmax(a)
-        argmin = numpy.argmin(a)
+        Bo_sum = numpy.sum( Bo, axis = 0)
+        ineq = ( Bo * x >= 0 )
+        ineq2 = ( Bo_sum * x == 1)
 
-        M[:,i] = numpy.argmax([argmax, argmin])   # check arguments here
+        # build optimization problem
+        prob_m1 = Problem( Maximize(a * x), [ ineq, ineq2 ])
+        argmax = prob_m1.solve()
 
-    print("Completed iterations")
+        y = Variable(k)
+        ineq3 = ( Bo * y >= 0 )
+        ineq4 = ( Bo_sum * y == 1)
 
-    if numpy.max(numpy.abs(numpy.linalg.det(N) - numpy.linalg.det(M))) <= epsilon:  # converged
-        break
+        prob_m2 = Problem( Minimize(a * y), [ ineq3, ineq4 ])
 
-C = Bo.multiply(csr_matrix(M.transpose()))  #matrix multiplication logic here, final C
+        # solve optimization problem and prints results
+        argmin = prob_m2.solve()
+
+        if ( numpy.linalg.norm(a * x.value) ) >= ( numpy.linalg.norm(a * y.value) ):
+            final = x.value
+        else:
+            final = y.value
+
+        M[:,i] = final   # check arguments here
+
+C = numpy.matmul(Bo, M)  #matrix multiplication logic here, final C
 Ct = C.transpose()
 
-# Impementing final determination of C, E
+C_new = C.T
 
-el1 = (Ct * C).todense()
-inv = numpy.linalg.pinv(el1)
-inv1 = inv * Ct
-inv11 = inv1 * co_matrix * C
-final = inv11 * inv     # final E
+# Printing the top 30 words in each category
+for k in range(4):
+    print (k)
+    words = C_new[k].argsort()[-30:][::-1]
+    print words
+    for word in words:
+        print values[word]
 
-print("Final matrix C: ", C)
-print("Final matrix E: ", final)
+print time.time() - start
